@@ -200,7 +200,7 @@ def shapekey_fixes(operator, context):
         else shapes_to_preserve
         ).append(shape)
         
-        for shape in shapes_to_delete:
+        for shape in (shape for shape in shapes_to_delete if shape is not o.data.shape_keys.reference_key):
             context.view_layer.objects.active = o   
             o.active_shape_key_index = o.data.shape_keys.key_blocks.find(shape.name)
             ShapeKeyToReferenceKey.execute(operator, context)
