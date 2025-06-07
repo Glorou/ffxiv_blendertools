@@ -10,13 +10,12 @@ bl_info = {
 
 import bpy 
 import os 
-from .functions import apply_modifiers_with_shape_keys, ShapeKeyToReferenceKey
+from .functions import ModifierToShapeKey, ShapeKeyToReferenceKey, ModifierList
 from bpy.props import StringProperty, BoolProperty, EnumProperty 
 from bpy_extras.io_utils import ImportHelper, ExportHelper 
 from bpy.types import Operator 
 
-class ModifierList(bpy.types.PropertyGroup): 
-    apply_modifier: bpy.props.BoolProperty(name="", default=False)
+
 
 class ImportFile(Operator, ImportHelper):
 
@@ -127,7 +126,7 @@ class ExportFile(Operator, ExportHelper):
     def execute(self, context):
         """Do something with the selected file(s).""" 
         with context.temp_override():
-            if self.apply_modifiers == 'YES_PRESERVE':
+            if self.apply_modifiers == 'YES_PRESERVE' and len(context.scene.objects) > 0:
                 shapekey_fixes(self, context)
             
             
@@ -211,12 +210,7 @@ def shapekey_fixes(operator, context):
         for shape in shapes_to_preserve:
             context.view_layer.objects.active = o 
             o.active_shape_key_index = o.data.shape_keys.key_blocks.find(shape.name)
-            collection_property: bpy.props.CollectionProperty(type=ModifierList)
-            for modifier in context.object.modifiers:
-                item = collection_property.add()
-                item.name = modifier.name
-                item.apply_modifier = True
-                apply_modifiers_with_shape_keys(context, collection_property, True)
+            ModifierToShapeKey.execute(operator, context)
                 
     if was_in_edit:
         bpy.context.active_object = active_edit
@@ -230,6 +224,7 @@ classes = (
     ExportFile,
     ShapeKeyToReferenceKey,
     ModifierList,
+    ModifierToShapeKey
     #IO_FH_fbx,
 )
 
@@ -241,6 +236,7 @@ def menu_func_export(self, context):
     self.layout.operator(ExportFile.bl_idname, text="Export FFXIV Model (.fbx/.glb/.gltf)")
 
 def register(): 
+    
     for cls in classes:
         bpy.utils.register_class(cls)
 
