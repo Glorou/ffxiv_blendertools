@@ -210,7 +210,7 @@ def shapekey_fixes(operator, context):
         for shape in shapes_to_preserve:
             context.view_layer.objects.active = o 
             o.active_shape_key_index = o.data.shape_keys.key_blocks.find(shape.name)
-            ModifierToShapeKey.execute(operator, context)
+            ModifierToShapeKey.run(ModifierToShapeKey, context)
                 
     if was_in_edit:
         bpy.context.active_object = active_edit

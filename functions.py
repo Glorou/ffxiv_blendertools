@@ -43,7 +43,8 @@ class ModifierToShapeKey(Operator):
     bl_idname = "object.apply_modifiers_with_shape_keys"
     bl_label = "Apply modifier(s) for mesh with shape keys"
 
-
+    collection_property: bpy.props.CollectionProperty(type=ModifierList)
+    
     def disable_armature_modifiers(context, selected_modifiers, disable_armatures):
         ''' if there is an armature modifier on the mesh, you can disable it so it doesn't affect the deformation
         it will be reset back after the add-on is finished '''
@@ -319,14 +320,14 @@ class ModifierToShapeKey(Operator):
 
         return True, None
         
-    def execute(self, context: Context):
-        collection_property: bpy.props.CollectionProperty(type=ModifierList)
-
+    def run(self, context):
+        
+        self.collection_property.clear()
         for modifier in context.active_object.modifiers:
-            item = collection_property.add()
+            item = self.collection_property.add()
             item.name = modifier.name
             item.apply_modifier = True
-        apply_modifiers_with_shape_keys(context, self.collection_property, True)
+        self.apply_modifiers_with_shape_keys(context, self.collection_property, True)
         
         return {'FINISHED'}
         
