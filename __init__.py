@@ -10,7 +10,7 @@ bl_info = {
 
 import bpy 
 import os 
-from .functions import ModifierToShapeKey, ShapeKeyToReferenceKey, ModifierList
+from .functions import apply_modifiers_with_shape_keys, ShapeKeyToReferenceKey
 from bpy.props import StringProperty, BoolProperty, EnumProperty 
 from bpy_extras.io_utils import ImportHelper, ExportHelper 
 from bpy.types import Operator 
@@ -210,7 +210,10 @@ def shapekey_fixes(operator, context):
         for shape in shapes_to_preserve:
             context.view_layer.objects.active = o 
             o.active_shape_key_index = o.data.shape_keys.key_blocks.find(shape.name)
-            ModifierToShapeKey.run(ModifierToShapeKey, context)
+            
+            selected_modifiers = [o.name for o in context.active_object.modifiers]
+            print(dir(selected_modifiers))
+            apply_modifiers_with_shape_keys(context, selected_modifiers, True)
                 
     if was_in_edit:
         bpy.context.active_object = active_edit
@@ -223,8 +226,6 @@ classes = (
     ImportFile,
     ExportFile,
     ShapeKeyToReferenceKey,
-    ModifierList,
-    ModifierToShapeKey
     #IO_FH_fbx,
 )
 
