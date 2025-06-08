@@ -10,6 +10,8 @@ bl_info = {
 
 import bpy 
 import os 
+import code
+import bmesh
 from .functions import apply_modifiers_with_shape_keys, ShapeKeyToReferenceKey
 from bpy.props import StringProperty, BoolProperty, EnumProperty 
 from bpy_extras.io_utils import ImportHelper, ExportHelper 
@@ -52,6 +54,7 @@ class ExportFile(Operator, ExportHelper):
 
     bl_idname = "export_scene.tool"
     bl_label = "Export model"
+    bl_description = "Export"
     #bl_options = {'UNDO', 'PRESET'}
     
     def file_callback(self, context):
@@ -124,14 +127,30 @@ class ExportFile(Operator, ExportHelper):
 
         
     def execute(self, context):
-        """Do something with the selected file(s).""" 
-        with context.temp_override():
+        """Do something with the selected file(s)."""
+        was_in_edit = (bpy.context.mode == 'EDIT_MESH')
+        if was_in_edit:
+            active_edit = bpy.context.active_object
+            bpy.ops.object.mode_set(mode = 'OBJECT')
+
+        #print(self.apply_modifiers)     
+        #code.interact(local=locals())
+        override = context.copy()
+        with bpy.context.temp_override(**override):
+
+            #we need to duplicate every mesh so when we do all of our modifications we dont touch the originals
+
+
+
             if self.apply_modifiers == 'YES_PRESERVE' and len(context.scene.objects) > 0:
                 shapekey_fixes(self, context)
-            
+
+
+
+                
             
         
-        
+
         #filename, extension = os.path.splitext(self.filepath)
             match self.filename_ext:
                 case ".fbx":
@@ -140,9 +159,11 @@ class ExportFile(Operator, ExportHelper):
                                             secondary_bone_axis='Y',
                                             use_active_collection = self.use_active_collection,
                                             use_visible = self.use_visible,
-                                            use_selection = self.use_visible,
-                                            use_mesh_modifiers = True if self.apply_modifiers == 'YES_APPLY' else False,
+                                            use_selection = self.use_selection,
+                                            use_mesh_modifiers = False if self.apply_modifiers == 'NO' else True,
+                                            use_mesh_modifiers_render = False,
                                             add_leaf_bones = False,
+                                            bake_anim = False,
                                             )
                 case ".glb" | ".gltf": 
                     bpy.ops.export_scene.gltf(filepath = self.filepath,
@@ -150,10 +171,14 @@ class ExportFile(Operator, ExportHelper):
                                             export_tangents=True,
                                             use_active_collection = self.use_active_collection,
                                             use_visible = self.use_visible,
-                                            use_selection = self.use_visible,
+                                            use_selection = self.use_selection,
                                             export_try_sparse_sk = False,
-                                            export_apply = True if self.apply_modifiers == 'YES_APPLY' else False,
+                                            export_apply = False if self.apply_modifiers == 'NO' else True,
+                                            export_animations = False,
                                             )
+        
+        if was_in_edit:
+            bpy.ops.object.mode_set(mode = 'EDIT')            
         return {'FINISHED'} 
 
 def export_main(layout, operator, is_file_browser):
@@ -181,43 +206,78 @@ def export_panel_gltf(layout, operator):
         body.enabled = (operator.filename_ext == ('.glb' or '.gltf'))
         body.prop(operator, "gltf_props")
  
+
+
+def duplicate_scene(operator, context):
+    if operator.use_visible:
+        layer = context.visible_objects
+    elif operator.use_selection:
+        layer = context.selected_objects
+    else:
+        layer = context.scene.objects
+    for o in (o for o in layer if o.type == 'MESH'):
+        tmp_me = o.data.copy()
+        bm = bmesh.new()
+        bm.from_mesh(tmp_me)
+        bmesh.ops.triangulate(bm, faces=bm.faces)
+        bm.to_mesh(tmp_me)
+        bm.free()
+
+
+
+
 #need to add triangulation but i cba
 # https://blender.stackexchange.com/questions/322905/apply-all-shape-keys-to-selected-objects-except-certain-shape-keys
 # need to add apply shapekey to basis
 def shapekey_fixes(operator, context):
     
-    was_in_edit = (bpy.context.mode == 'EDIT_MESH')
-    if was_in_edit:
-        active_edit = bpy.context.active_object
-        
-    bpy.ops.object.mode_set(mode = 'OBJECT')
     
-    for o in (o for o in context.scene.objects if o.type == 'MESH' and o.data.shape_keys):
+    if operator.use_visible:
+        layer = context.visible_objects
+    elif operator.use_selection:
+        layer = context.selected_objects
+    else:
+        layer = context.scene.objects
+
+    for o in (o for o in layer if o.type == 'MESH' and o.data.shape_keys):
+        if not o.visible_get():
+            o.set_hide(False)
+        context.view_layer.objects.active = o
+
+        #skip object if we cant set it for some reason
+        #if not o.visible_get():
+         #   continue
+
         shapes_to_delete, shapes_to_preserve = [], []
         for shape in o.data.shape_keys.key_blocks:(
             shapes_to_delete if 'shpx_' not in shape.name.lower() and 'shp_' not in shape.name.lower()
         else shapes_to_preserve
         ).append(shape)
-        
-        for shape in (shape for shape in shapes_to_delete if shape is not o.data.shape_keys.reference_key):
-            context.view_layer.objects.active = o   
+        print("!!!!!!!!! Shapekey_fix pre op")
+        print(o)
+        print(o.data.shape_keys.key_blocks.values())
+        print(context.blend_data.shape_keys['Butt Shapekeys'].key_blocks.find('shpx_wa_tre'))
+        print(o.data.shape_keys.reference_key)
+        #code.interact(local=locals())
+        for shape in (shape for shape in shapes_to_delete if shape.name != o.data.shape_keys.reference_key.name):   
             o.active_shape_key_index = o.data.shape_keys.key_blocks.find(shape.name)
             ShapeKeyToReferenceKey.execute(operator, context)
             o.shape_key_remove(shape)
         
-        
-        
+
+
+
         for shape in shapes_to_preserve:
             context.view_layer.objects.active = o 
             o.active_shape_key_index = o.data.shape_keys.key_blocks.find(shape.name)
             
-            selected_modifiers = [o.name for o in context.active_object.modifiers]
-            print(dir(selected_modifiers))
-            apply_modifiers_with_shape_keys(context, selected_modifiers, True)
-                
-    if was_in_edit:
-        bpy.context.active_object = active_edit
-        bpy.ops.object.mode_set(mode = 'EDIT')
+            
+            selected_modifiers = [o.name for o in o.modifiers if o.type != 'ARMATURE']
+            #print(dir(selected_modifiers))
+            #print("%d" % o.data.shape_keys.key_blocks.find(shape.name))
+            apply_modifiers_with_shape_keys(context, selected_modifiers)
+        #code.interact(local=locals())    
+
         
     return
     
@@ -255,3 +315,10 @@ if __name__ == "__main__":
         
     # test call 
     #bpy.ops.test.open_filebrowser('INVOKE_DEFAULT')
+
+
+        #    print("!!!!!!!!! Shapekey_fix")
+        #print(o)
+        #if o.data.shape_keys:
+        #    print(o.data.shape_keys.key_blocks.values())
+        #print(context.blend_data.shape_keys['Butt Shapekeys'].key_blocks.find('shpx_wa_tre'))

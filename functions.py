@@ -18,6 +18,7 @@ Created by Wayne Dixon
 
 import bpy
 import re
+import code
 from bpy.types import (
     Context,
     Key,
@@ -39,65 +40,119 @@ T = TypeVar("T", bound=Operator)
 
 # Helper functions
     
-def disable_armature_modifiers(context, selected_modifiers, disable_armatures):
-    ''' if there is an armature modifier on the mesh, you can disable it so it doesn't affect the deformation
-    it will be reset back after the add-on is finished '''
-    disabled_armature_modifiers = []
-    if disable_armatures:
-        for modifier in context.object.modifiers:
-            if modifier.type == 'ARMATURE' and modifier.show_viewport:
-                if modifier.name not in selected_modifiers:
-                    disabled_armature_modifiers.append(modifier)
-                    modifier.show_viewport = False
-    return disabled_armature_modifiers
+def disable_modifiers(context, selected_modifiers):
+    ''' disables any modifiers that are not selected so the mesh can be calculated.
+    Returns a list of modifiers it changed so they can be reset later '''
+    saved_enabled_modifiers = []
+
+    for modifier in context.object.modifiers:
+        if modifier.name not in selected_modifiers and modifier.show_viewport:
+            saved_enabled_modifiers.append(modifier)
+            modifier.show_viewport = False
+    return saved_enabled_modifiers
 
 
-def duplicate_object(obj):
-    bpy.ops.object.select_all(action='DESELECT')
-    obj.select_set(True)
-    bpy.ops.object.duplicate_move(OBJECT_OT_duplicate={"linked": False, "mode": 'TRANSLATION'}, TRANSFORM_OT_translate={"value": (0, 0, 0)})
+def duplicate_object(context, obj):
+    '''Copy the object, make it active and return it '''
+    new_obj = obj.copy()
+    new_obj.data = obj.data.copy()
+    context.collection.objects.link(new_obj)
+    context.view_layer.objects.active = new_obj
+    return new_obj
+
+
+def evaluate_mesh(context, obj):
+    """Low-level alternative to `bpy.ops.object.convert` for converting to meshes"""
+    depsgraph = context.evaluated_depsgraph_get()
+    eval_obj = obj.evaluated_get(depsgraph)
+    mesh = context.blend_data.meshes.new_from_object(eval_obj, preserve_all_data_layers=True, depsgraph=depsgraph)
+    return mesh
 
 
 def apply_modifier_to_object(context, obj, selected_modifiers):
-    bpy.context.view_layer.objects.active = obj
+    ''' Disables all modifers except the selected ones
+    Creates a new mesh from that output and swaps it out
+    Removes the selected modifiers
+    Deletes the old mesh and restores the other modifiers to what they were
+    '''
+    context.view_layer.objects.active = obj
+
+    # Disable all modifiers (except selected)
+    saved_enabled_modifiers = disable_modifiers(context, selected_modifiers)
+
+    # Make sure all selected modifers are enabled
     for modifier_name in selected_modifiers:
+        #code.interact(local=locals())
         modifier = obj.modifiers.get(modifier_name)
-        if modifier and not modifier.show_viewport: # enables the modifier before trying to apply it
+        modifier.show_viewport = True
+
+    # evaluate new mesh and swap it out
+    new_mesh = evaluate_mesh(context, obj)
+    old_mesh = obj.data
+    old_mesh_name = old_mesh.name
+    obj.data = new_mesh
+
+    # Delete the selected modifiers from the object
+    for modifier in selected_modifiers:
+        obj.modifiers.remove(obj.modifiers[modifier])
+
+    # Delete the old mesh and rename the data block
+    context.blend_data.meshes.remove(old_mesh)
+    obj.data.name = old_mesh_name
+
+    # restore the previously enabled modifiers
+    if len(saved_enabled_modifiers) > 0:
+        for modifier in saved_enabled_modifiers:
             modifier.show_viewport = True
-        try:
-            bpy.ops.object.modifier_apply(modifier=modifier_name)
-        except RuntimeError:
-            print(f"Skipping broken modifier: {modifier_name}")
 
 
-def save_shape_key_properties(obj, properties):
-    ''' This function will save the settings on the shape keys (min/max etc) '''
-    properties_list = []
-    for key_block in obj.data.shape_keys.key_blocks:
-        if key_block.name == "Basis":
+def save_shape_key_properties(obj):
+    ''' This function will save the settings on the shape keys (min/max etc) and return them as a dictionary'''
+    properties_dict = {}
+    for idx, key_block in enumerate(obj.data.shape_keys.key_blocks): # will skip index 0 (Basis)
+        if idx == 0:
             continue
-        properties_object = {p: getattr(key_block, p) for p in properties}
-        properties_list.append(properties_object)
-    return properties_list
+        properties_object = {p.identifier: getattr(key_block, p.identifier) for p in key_block.bl_rna.properties if not p.is_readonly}
+        properties_dict[key_block.name] = {"properties": properties_object}
+    return properties_dict
 
 
-def restore_shape_key_properties(obj, properties_list):
+def restore_shape_key_properties(obj, property_dict):
     ''' Restores the settings for each shape key (min/max etc) '''
-    for idx, key_block in enumerate(obj.data.shape_keys.key_blocks):
-        if key_block.name == "Basis":
+    for idx, key_block in enumerate(obj.data.shape_keys.key_blocks): # will skip index 0 (Basis)
+        if idx == 0:
             continue
-        for prop, value in properties_list[idx - 1].items():
-            setattr(key_block, prop, value)
+        properties = list(property_dict.items())[idx - 1][1]['properties']
+        for prop, value in properties.items():
+                setattr(key_block, prop, value)
+
+def join_as_shape(temp_obj, original_obj):
+    '''Join the temp object back to the original as a shape key 
+    Vertex positions are transferred by index.
+    Different number of vertices or index will give unpredictable results
+    '''
+
+    # create a basis shape on the temp object to make the next step easier
+    temp_obj_shape = temp_obj.shape_key_add(from_mix=False)
+    # temp_obj_verts = temp_obj.data.shape_keys.key_blocks[1:]
+    new_org_shape = original_obj.shape_key_add(from_mix=False)
+
+    # Transfer Vertex Positions
+    for source_vert, target_vert in zip(temp_obj_shape.data, new_org_shape.data):
+        target_vert.co = source_vert.co
+
+    # return {'FINISHED'}
 
 
-def copy_shape_key_drivers(obj, shape_key_properties):
-    ''' Copy drivers for shape key properties '''
+def save_shape_key_drivers(obj, property_dict):
+    ''' Copy drivers for shape key properties by checking the property dictionary against the driver paths.
+    returns a new dictionary with the drivers and the properties on the shape keys they drive'''
 
     drivers = {}
 
-    # Ensure the object has a shape keys animation data
+    # Ensure the object has shape keys animation data
     if not obj.data.shape_keys.animation_data:
-        # print(f"No animation data found for {obj.name}.") # DEBUG
+        # print(f"No animation data found for {obj.name}.")  # DEBUG
         return drivers
 
     # Loop through all the drivers in the shape keys animation data
@@ -110,24 +165,25 @@ def copy_shape_key_drivers(obj, shape_key_properties):
         if len(data_path_parts) > 1:
             property_name = data_path_parts[-1]  # The last part of the data path is the property name (e.g. 'value', 'slider_min', 'slider_max')
 
-            if property_name not in shape_key_properties:
-                continue  # Skip if the property isn't one we care about
+            # Check if the property is in the dictionary
+            properties = list(property_dict.items())
 
-            # Find the shape key name
+            # Find the shape key name using a regular expression
             match = re.search(r'key_blocks\["(.*)"\]', driver.data_path)
+
             shape_key_name = match.group(1)
 
             # Create a dictionary for the driver data
             driver_data = {
                 "driver": driver,
-                "property": property_name 
+                "property": property_name
             }
 
             # Append the driver data to the shape_key_drivers list
-            shape_key_drivers.append(driver_data)
+            if shape_key_name not in drivers:
+                drivers[shape_key_name] = []
 
-        if shape_key_drivers:
-            drivers[shape_key_name] = shape_key_drivers
+            drivers[shape_key_name].append(driver_data)
 
     return drivers
 
@@ -151,9 +207,6 @@ def restore_shape_key_drivers(obj, copy_obj,drivers, context):
 
             # Add the driver to the shape key property
             try:
-                # Remove any drivers or animation on the shape keys
-                obj.data.shape_keys.animation_data_clear()
-
                 new_driver = shape_key_block.driver_add(property_name)
 
                 # set the type
@@ -200,115 +253,104 @@ def copy_shape_key_animation(source_obj, target_obj):
         return
 
     # Link the existing action to the target object
-    target_obj.data.shape_keys.animation_data_create()  # Create animation data for the target object if needed
+    if not target_obj.data.shape_keys.animation_data:
+        target_obj.data.shape_keys.animation_data_create()  # Create animation data for the target shape key if needed
     target_obj.data.shape_keys.animation_data.action = source_obj.data.shape_keys.animation_data.action
+    
+    # Link the existing action slot to the action (Blender ver > 4.4)
+    if bpy.app.version >= (4, 4, 0):
+        target_obj.data.shape_keys.animation_data.action_slot = source_obj.data.shape_keys.animation_data.action_slot
 
     # print(f"Shape key animations copied from {source_obj.name} to {target_obj.name}.") # DEBUG
 
 
 # Primary function (this gets imported and used by the operator)
-def apply_modifiers_with_shape_keys(context, selected_modifiers, disable_armatures):
+def apply_modifiers_with_shape_keys(context, selected_modifiers):
     ''' Apply the selected modifiers to the mesh even if it has shape keys '''
     original_obj = context.view_layer.objects.active
     shapes_count = len(original_obj.data.shape_keys.key_blocks) if original_obj.data.shape_keys else 0
     error_message = None
-    
-    
-    if shapes_count == 0: # if there are no shape keys just apply the selected modifiers
+
+    if shapes_count == 1: # if there is only a Basis shape, delete the shape and apply the modifiers
+        original_obj.shape_key_remove(original_obj.data.shape_keys.key_blocks[0])
         apply_modifier_to_object(context, original_obj, selected_modifiers)
         return True, None
 
-    # Disable armatures if necessary
-    disabled_armature_modifiers = disable_armature_modifiers(context, selected_modifiers, disable_armatures)
-
     # Save the pin option setting and active shape key index
-    pin_setting = bpy.data.objects[original_obj.name].show_only_shape_key
+    pin_setting = original_obj.show_only_shape_key
     saved_active_shape_key_index = original_obj.active_shape_key_index
 
     # Duplicate the object
-    duplicate_object(original_obj)
-    copy_obj = context.view_layer.objects.active
-
-    # Make the Original Object the active object
-    context.view_layer.objects.active = original_obj
+    copy_obj = duplicate_object(context, original_obj)
 
     # Save the shape key properties
-    properties = ["name", "mute", "lock_shape", "value", "slider_min", "slider_max", "vertex_group", "relative_key"]
-    shape_key_properties = save_shape_key_properties(original_obj, properties)
+    shape_key_properties = save_shape_key_properties(original_obj)
 
     # Copy drivers for shape keys (from the copy because the original ones will be gone in a moment)
-    shape_key_drivers = copy_shape_key_drivers(copy_obj, properties)
+    shape_key_drivers = save_shape_key_drivers(copy_obj, shape_key_properties[original_obj.active_shape_key.name])
 
     # Remove all shape keys and apply modifiers on the original
-    bpy.ops.object.shape_key_remove(all=True)
+
+    original_obj.shape_key_clear()
     apply_modifier_to_object(context, original_obj, selected_modifiers)
 
     # Add a basis shape key back to the original object
-    original_obj.shape_key_add(name='Basis',from_mix=False)
+    original_obj.shape_key_add(name=copy_obj.data.shape_keys.key_blocks[0].name,from_mix=False)
 
     # Loop over the original shape keys, create a temp mesh, apply single shape, apply modifers and merge back to the original (1 shape at a time)
-    for i, shape_properties in enumerate(shape_key_properties):
+    for i, (key_block_name, properties) in enumerate(shape_key_properties.items()):
         # Create a temp object
         context.view_layer.objects.active = copy_obj
-        duplicate_object(copy_obj)
-        temp_obj = bpy.context.active_object
+        temp_obj = duplicate_object(context, copy_obj)
 
         # Pin the shape we want
-        bpy.data.objects[temp_obj.name].show_only_shape_key = True
-        temp_obj.active_shape_key_index = i + 1
-        print(dir(temp_obj))
-        print(temp_obj.active_shape_key)
+        
+        #code.interact(local=locals())
+        temp_obj.show_only_shape_key = True
+        temp_obj.active_shape_key_index = i + 1 
         shape_key_name = temp_obj.active_shape_key.name
+        temp_obj_old_mesh = temp_obj.data
 
-        # Apply the shape key to freeze the mesh in that position, then apply the modifiers
-        for window in context.window_manager.windows:
-            screen = window.screen
-            for area in screen.areas:
-                if area.type == 'VIEW_3D':
-                    with context.temp_override(window=window, area=area):
-                        bpy.ops.object.shape_key_remove(all=True, apply_mix=True)
-                        apply_modifier_to_object(context, temp_obj, selected_modifiers)
-                    break
+        # Disable all modifiers (including selected)
+        for modifier in temp_obj.modifiers:
+            modifier.show_viewport = False
+        
 
+        # Now freeze the mesh by applying the selected modifiers
+        apply_modifier_to_object(context, temp_obj, selected_modifiers)
+        
         # Verify the meshes have the same amount of verts
         if len(original_obj.data.vertices) != len(temp_obj.data.vertices):
-            error_message = f"{shape_key_name} failed because the mesh no longer have the same amount of vertices after applying the modifiers."
+            error_message = f"{shape_key_name} failed because the mesh no longer have the same amount of vertices after applying selected modifier(s)."
             # Clean up the temp object and try to move on
-            bpy.data.objects.remove(temp_obj)
+            context.blend_data.objects.remove(temp_obj)
             continue
 
-
         # Transfer the temp object as a shape back to orginal
-        temp_obj.select_set(True)
-        context.view_layer.objects.active = original_obj
-        bpy.ops.object.join_shapes()
-
-        # Restore shape key properties
-        restore_shape_key_properties(original_obj, shape_key_properties)
-
-        # Restore the drivers for this shape key
-        restore_shape_key_drivers(original_obj, copy_obj, shape_key_drivers, context)
+        join_as_shape(temp_obj, original_obj)
 
         # Clean up the temp object
-        bpy.data.objects.remove(temp_obj)
+        context.blend_data.meshes.remove(temp_obj.data)
+
+
+    # Restore shape key properties
+    restore_shape_key_properties(original_obj, shape_key_properties)
 
     # Restore any shape key animation
     copy_shape_key_animation(copy_obj, original_obj)
 
-    # Clean up the duplicate object
-    bpy.data.objects.remove(copy_obj)
+    # Restore any shape key drivers
+    restore_shape_key_drivers(original_obj, copy_obj, shape_key_drivers, context)
 
-    # Re-enable armature modifiers
-    if disable_armatures:
-        for modifier in disabled_armature_modifiers:
-            modifier.show_viewport = True
+    # Clean up the duplicate object
+    context.blend_data.meshes.remove(copy_obj.data)
 
     # Restore the pin option setting and active shape key index
-    bpy.data.objects[original_obj.name].show_only_shape_key = pin_setting
+    original_obj.show_only_shape_key = pin_setting
     original_obj.active_shape_key_index =  saved_active_shape_key_index
 
-    # Make sure the original object is selected before finishing
-    original_obj.select_set(True)
+    # Make sure the original object is active before finishing
+    context.view_layer.objects.active = original_obj
 
     # Report the error message if any
     if error_message:
