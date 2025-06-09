@@ -142,10 +142,12 @@ class ExportFile(Operator, ExportHelper):
 
         
         dupes = []
-
+        tempcontext = context.copy()
         for o in objects:
-            with context.temp_override(active_object=o):
-
+            with context.temp_override(context=tempcontext):
+                bpy.ops.object.select_all(action="DESELECT")
+                context.view_layer.objects.active = o
+                o.select_set(state=True)
                 bpy.ops.object.duplicate()
                 dupe = context.active_object
                 dupe.name = "Export " + o.name
@@ -155,7 +157,9 @@ class ExportFile(Operator, ExportHelper):
 
         override = context.copy()
         override["selected_objects"] = dupes
+        override["active_object"] = dupes[0]
         with bpy.context.temp_override(**override):
+
             bpy.ops.object.mode_set(mode = 'OBJECT')
             #we need to duplicate every mesh so when we do all of our modifications we dont touch the originals
 
@@ -244,7 +248,7 @@ def export_panel_gltf(layout, operator):
 def shapekey_fixes(operator, context, dupes):
     
 
-    for o in (o for o in dupes if o.type == 'MESH' and o.data.shape_keys):
+    for o in (o for o in dupes if (o.type == 'MESH' and o.data.shape_keys)):
         if not o.visible_get():
             o.hide_set(False)
         context.view_layer.objects.active = o
@@ -266,6 +270,7 @@ def shapekey_fixes(operator, context, dupes):
         #code.interact(local=locals())
         for shape in (shape for shape in shapes_to_delete if shape.name != o.data.shape_keys.reference_key.name):   
             o.active_shape_key_index = o.data.shape_keys.key_blocks.find(shape.name)
+            print(o)
             ShapeKeyToReferenceKey.execute(operator, context)
             o.shape_key_remove(shape)
         
