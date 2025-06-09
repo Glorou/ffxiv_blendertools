@@ -128,22 +128,41 @@ class ExportFile(Operator, ExportHelper):
         
     def execute(self, context):
         """Do something with the selected file(s)."""
-        was_in_edit = (bpy.context.mode == 'EDIT_MESH')
-        if was_in_edit:
-            active_edit = bpy.context.active_object
-            bpy.ops.object.mode_set(mode = 'OBJECT')
+
+        active = bpy.context.active_object
 
         #print(self.apply_modifiers)     
         #code.interact(local=locals())
-        override = context.copy()
-        with bpy.context.temp_override(**override):
+        if self.use_visible:
+            objects = context.visible_objects
+        elif self.use_selection:
+            objects = context.selected_objects
+        else:
+            objects = context.scene.objects
 
+        
+        dupes = []
+
+        for o in objects:
+            with context.temp_override(active_object=o):
+
+                bpy.ops.object.duplicate()
+                dupe = context.active_object
+                dupe.name = "Export " + o.name
+                dupes.append(dupe)
+          #      if not mod.object.visible_get():
+
+
+        override = context.copy()
+        override["selected_objects"] = dupes
+        with bpy.context.temp_override(**override):
+            bpy.ops.object.mode_set(mode = 'OBJECT')
             #we need to duplicate every mesh so when we do all of our modifications we dont touch the originals
 
 
 
             if self.apply_modifiers == 'YES_PRESERVE' and len(context.scene.objects) > 0:
-                shapekey_fixes(self, context)
+                shapekey_fixes(self, context, dupes)
 
 
 
@@ -158,8 +177,8 @@ class ExportFile(Operator, ExportHelper):
                                             primary_bone_axis='X',
                                             secondary_bone_axis='Y',
                                             use_active_collection = self.use_active_collection,
-                                            use_visible = self.use_visible,
-                                            use_selection = self.use_selection,
+                                            #use_visible = self.use_visible,
+                                            use_selection = True,
                                             use_mesh_modifiers = False if self.apply_modifiers == 'NO' else True,
                                             use_mesh_modifiers_render = False,
                                             add_leaf_bones = False,
@@ -169,16 +188,16 @@ class ExportFile(Operator, ExportHelper):
                     bpy.ops.export_scene.gltf(filepath = self.filepath,
                                             export_format= 'GLB' if self.filename_ext == '.glb' else 'GLTF_SEPARATE',
                                             export_tangents=True,
-                                            use_active_collection = self.use_active_collection,
-                                            use_visible = self.use_visible,
-                                            use_selection = self.use_selection,
+                                            #use_active_collection = self.use_active_collection,
+                                            #use_visible = self.use_visible,
+                                            use_selection = True,
                                             export_try_sparse_sk = False,
                                             export_apply = False if self.apply_modifiers == 'NO' else True,
                                             export_animations = False,
                                             )
-        
-        if was_in_edit:
-            bpy.ops.object.mode_set(mode = 'EDIT')            
+            for o in dupes:
+                bpy.data.objects.remove(o)
+
         return {'FINISHED'} 
 
 def export_main(layout, operator, is_file_browser):
@@ -208,20 +227,13 @@ def export_panel_gltf(layout, operator):
  
 
 
-def duplicate_scene(operator, context):
-    if operator.use_visible:
-        layer = context.visible_objects
-    elif operator.use_selection:
-        layer = context.selected_objects
-    else:
-        layer = context.scene.objects
-    for o in (o for o in layer if o.type == 'MESH'):
-        tmp_me = o.data.copy()
-        bm = bmesh.new()
-        bm.from_mesh(tmp_me)
-        bmesh.ops.triangulate(bm, faces=bm.faces)
-        bm.to_mesh(tmp_me)
-        bm.free()
+
+
+        
+
+
+
+
 
 
 
@@ -229,19 +241,12 @@ def duplicate_scene(operator, context):
 #need to add triangulation but i cba
 # https://blender.stackexchange.com/questions/322905/apply-all-shape-keys-to-selected-objects-except-certain-shape-keys
 # need to add apply shapekey to basis
-def shapekey_fixes(operator, context):
+def shapekey_fixes(operator, context, dupes):
     
-    
-    if operator.use_visible:
-        layer = context.visible_objects
-    elif operator.use_selection:
-        layer = context.selected_objects
-    else:
-        layer = context.scene.objects
 
-    for o in (o for o in layer if o.type == 'MESH' and o.data.shape_keys):
+    for o in (o for o in dupes if o.type == 'MESH' and o.data.shape_keys):
         if not o.visible_get():
-            o.set_hide(False)
+            o.hide_set(False)
         context.view_layer.objects.active = o
 
         #skip object if we cant set it for some reason
@@ -253,11 +258,11 @@ def shapekey_fixes(operator, context):
             shapes_to_delete if 'shpx_' not in shape.name.lower() and 'shp_' not in shape.name.lower()
         else shapes_to_preserve
         ).append(shape)
-        print("!!!!!!!!! Shapekey_fix pre op")
-        print(o)
-        print(o.data.shape_keys.key_blocks.values())
-        print(context.blend_data.shape_keys['Butt Shapekeys'].key_blocks.find('shpx_wa_tre'))
-        print(o.data.shape_keys.reference_key)
+        #print("!!!!!!!!! Shapekey_fix pre op")
+        #print(o)
+        #print(o.data.shape_keys.key_blocks.values())
+        #print(context.blend_data.shape_keys['Butt Shapekeys'].key_blocks.find('shpx_wa_tre'))
+        #print(o.data.shape_keys.reference_key)
         #code.interact(local=locals())
         for shape in (shape for shape in shapes_to_delete if shape.name != o.data.shape_keys.reference_key.name):   
             o.active_shape_key_index = o.data.shape_keys.key_blocks.find(shape.name)
