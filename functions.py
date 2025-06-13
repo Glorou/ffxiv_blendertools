@@ -123,6 +123,7 @@ def restore_shape_key_properties(obj, property_dict):
         if idx == 0:
             continue
         properties = list(property_dict.items())[idx - 1][1]['properties']
+        print(obj)
         for prop, value in properties.items():
                 setattr(key_block, prop, value)
 
