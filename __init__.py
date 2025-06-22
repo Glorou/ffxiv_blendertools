@@ -24,46 +24,32 @@ from bpy.types import Operator
 
 class ShapekeyCounter(Operator):
     bl_idname = "ffxiv_tools.shape_count"
-    bl_label = "CheckShapes"
+    bl_label = "FFXIV Shapekeys"
+
+    enabled : BoolProperty(
+        name="Enable or Disable",
+        description="Turn the shapekey counter on or off",
+        default=False,
+    )
+
+    def draw(self, context):
+        layout = self.layout
+        overlay = context.space_data.overlay
+        layout.prop(overlay, "enabled", text="FF14 Shapekey Counter", toggle=True)
 
     def execute(self, context):
-        counter = dict()
-        zero_vect = mathutils.Vector((0.0, 0.0, 0.0))
-        for o in (o for o in bpy.context.scene.objects if o.type == 'MESH' and o.visible_get()):
-            matching = re.search(r"(?P<major>\d{1,2})\.(?P<minor>\d{1,5})", o.name)
-            if matching != None:
-                #check keys
-                major = int(matching.groupdict()['major'])
-                minor = int(matching.groupdict()['minor'])
-                if major not in counter.keys():
-                    counter[major] = 0
-                if(o.data.shape_keys != None):
-                    shape_verts = 0  
-                    for shp in (shp for shp in o.data.shape_keys.key_blocks if shp != o.data.shape_keys.reference_key and 'shp' in shp.name.lower()):
-                        for key in shp.points.items():
-                            if (shp.points[key[0]].co.xyz - o.data.shape_keys.reference_key.points[key[0]].co.xyz) != zero_vect: 
-                                shape_verts = shape_verts + 1 
-                                    
-                    counter[major] += shape_verts       
-                counter[major] += len(o.data.vertices.items())
-                
-        output_str = ""
-        for key in counter.keys():
-            if counter[key] > 65535:
-                mesh_info = "which has {val} too many verts".format(val=counter[key]-65535)
-            else:
-                mesh_info = "which has {val} more verts until the quota is hit".format(val=65535-counter[key])
-            output_str += "Mesh {major} has {count} verts, {info}.\n".format(major=key, count=counter[key], info = mesh_info)
-
-
-            
-        if len(output_str) == 0:
-            output_str = "No meshes found"
+        global text_handle
+        if not self.enabled:
+            text_handle = bpy.types.SpaceView3D.draw_handler_add(draw_widget, (), 'WINDOW', 'POST_PIXEL')
+            subscribe()
+            self.enabled = not self.enabled
         else:
-            output_str = output_str[:-2]
-            
-        self.report({'INFO'}, output_str)
+            bpy.types.SpaceView3D.draw_handler_remove(text_handle, 'WINDOW')
+            unsubscribe()
+            self.enabled = not self.enabled
         return {'FINISHED'}
+    
+
     
 
 
@@ -336,7 +322,8 @@ def export_panel_include(layout, operator, is_file_browser):
             sublayout.prop(operator, "use_selection")
             sublayout.prop(operator, "use_visible")
             sublayout.prop(operator, "use_active_collection")
-            
+
+
 
 def export_panel_gltf(layout, operator):
     header, body = layout.panel("ffxiv_export_gltf", default_closed=True)
@@ -441,25 +428,24 @@ def menu_func_import(self, context):
 def menu_func_export(self, context):
     self.layout.operator(ExportFile.bl_idname, text="Export FFXIV Model (.fbx/.glb/.gltf)")
 
-def register(): 
-    
-    
+def menu_func_shapes(self, context):
+    self.layout.operator(ShapekeyCounter.bl_idname)
 
-    global text_handle
+
+def register(): 
+
     for cls in classes:
         bpy.utils.register_class(cls)
 
     bpy.types.TOPBAR_MT_file_import.append(menu_func_import)
     bpy.types.TOPBAR_MT_file_export.append(menu_func_export)
-    text_handle = bpy.types.SpaceView3D.draw_handler_add(draw_widget, (), 'WINDOW', 'POST_PIXEL')
-    subscribe()
+    bpy.types.VIEW3D_PT_overlay.append(menu_func_shapes)
+
 
 def unregister():
-    global text_handle
-    unsubscribe()
     bpy.types.TOPBAR_MT_file_import.remove(menu_func_import)
     bpy.types.TOPBAR_MT_file_export.remove(menu_func_export)
-    bpy.types.SpaceView3D.draw_handler_remove(text_handle, 'WINDOW')
+    bpy.types.VIEW3D_PT_overlay.remove(menu_func_shapes)
     for cls in classes:
         bpy.utils.unregister_class(cls)
 
