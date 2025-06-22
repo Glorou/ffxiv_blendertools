@@ -1,5 +1,6 @@
 import bpy, blf
 import gpu
+from bpy.app.handlers import persistent
 from gpu_extras.batch import batch_for_shader
 import mathutils
 import re
@@ -12,6 +13,42 @@ shader_box = gpu.shader.from_builtin('UNIFORM_COLOR')
 owner = object()
 
 
+
+
+
+def msgbus_callback(*args):
+    calc(args[0])
+
+def subscribe():
+
+    global owner
+    subscribe_to = (bpy.types.Object, "name")
+
+    bpy.msgbus.subscribe_rna(
+        key=subscribe_to,
+        owner=owner,
+        args=(True, None, None),
+        notify=msgbus_callback,
+        options={"PERSISTENT",}
+    )
+    if load_handler not in bpy.app.handlers.load_post:
+        bpy.app.handlers.load_post.append(load_handler)
+    
+
+def unsubscribe():
+    global owner
+    # Clear all subscribers by this owner
+    if owner is not None:
+        bpy.msgbus.clear_by_owner(owner)
+
+    # Unregister the persistent handler.
+    if load_handler in bpy.app.handlers.load_post:
+        bpy.app.handlers.load_post.remove(load_handler)
+
+
+@persistent
+def load_handler(dummy):
+    subscribe()
 
 class BlfText:
     __slots__ = 'color', 'x', 'y', 'text', 'size', 'font_id'
@@ -43,7 +80,9 @@ class BlfText:
 
 
 def draw_element(pos_left=0, pos_bottom=0, scale=1.0, bar_size_x=250, bar_size_y=20):
+
     counter = calc()
+
     border = round(10 * scale)
     inner = round(8 * scale)
     font_size = round(14 * scale)
@@ -55,7 +94,7 @@ def draw_element(pos_left=0, pos_bottom=0, scale=1.0, bar_size_x=250, bar_size_y
     bar_T = round(bar_B + bar_size_y * scale)
     text_y = bar_T + inner
     text_x = pos_left + border
-    background_T = text_y + round(blf.dimensions(font_id, "X")[1]) + border
+
 
     
     string = ""
@@ -74,29 +113,14 @@ def draw_element(pos_left=0, pos_bottom=0, scale=1.0, bar_size_x=250, bar_size_y
 
 
     active_text = BlfText(font_color, text_x, text_y, string, font_size, font_id)
-    #bar_L = active_text.calc_center_pos_x()
-    #bar_R = round(bar_L + bar_size_x * scale)
+
     
 
 
     warning_text = BlfText((1, 0, 0, 1), text_x, text_y - (font_size * 1.5), warning, font_size, font_id)
-    #dimen_half = warning_text.calc_center_pos_x()
-    #background_R = round(warning_text.x + blf.dimensions(font_id, warning_text.text)[0] + border)
-
-
-    #batch_background = batch_for_shader(shader_box, 'TRIS', {"pos": (
-     #   (pos_left, pos_bottom), (background_R, pos_bottom),
-      #  (pos_left, background_T), (background_R, background_T),
-       # )})
-    #batch_bar = batch_for_shader(shader, 'TRIS', {"pos": (
-     #   (bar_L, bar_B), (bar_R, bar_B),
-      #  (bar_L, bar_T), (bar_R, bar_T),
-       # ), "color": colors}, indices=indices)
 
 
     shader_box.uniform_float("color", (0.2, 0.2, 0.2, 0.0))
-    #batch_background.draw(shader_box)
-    #batch_bar.draw(shader)
 
     active_text.draw()
     if warning != "":
@@ -115,26 +139,40 @@ def draw_widget():
 
 
 
-def calc():
-    counter = dict()
-    zero_vect = mathutils.Vector((0.0, 0.0, 0.0))
+def calc(override=False):
+    if not hasattr(calc, "counter"):
+        calc.counter = dict()
+    if not hasattr(calc, "objs_seen"):
+        calc.objs_seen = 0
+
+    current_objs = 0
     for o in (o for o in bpy.context.scene.objects if o.type == 'MESH' and o.visible_get()):
+        current_objs += 1
+    
+    if(current_objs == calc.objs_seen and not override):
+        return calc.counter
+    else:
+        calc.objs_seen = 0
+        calc.counter = dict()
+
+    for o in (o for o in bpy.context.scene.objects if o.type == 'MESH' and o.visible_get()):
+        calc.objs_seen += 1
         matching = re.search(r"(?P<major>\d{1,2})\.(?P<minor>\d{1,5})", o.name)
         if matching != None:
             #check keys
             major = int(matching.groupdict()['major'])
             minor = int(matching.groupdict()['minor'])
-            if major not in counter.keys():
-                counter[major] = 0
+            if major not in calc.counter.keys():
+                calc.counter[major] = 0
             if(o.data.shape_keys != None):
                 shape_verts = 0  
                 for shp in (shp for shp in o.data.shape_keys.key_blocks if shp != o.data.shape_keys.reference_key and 'shp' in shp.name.lower()):
                     for key in shp.points.items():
-                        if (shp.points[key[0]].co.xyz - o.data.shape_keys.reference_key.points[key[0]].co.xyz) != zero_vect: 
+                        if shp.points[key[0]].co != o.data.shape_keys.reference_key.points[key[0]].co: 
                             shape_verts = shape_verts + 1 
                                 
-                counter[major] += shape_verts       
-            counter[major] += len(o.data.vertices.items())
-    return counter
+                calc.counter[major] += shape_verts       
+            calc.counter[major] += len(o.data.vertices.items())
+    return calc.counter
 
 # Add the draw handler

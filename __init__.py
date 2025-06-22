@@ -15,9 +15,12 @@ import bmesh
 import re
 import mathutils
 from .functions import apply_modifiers_with_shape_keys, ShapeKeyToReferenceKey
+from .widget import BlfText, draw_widget, subscribe, unsubscribe
 from bpy.props import StringProperty, BoolProperty, EnumProperty 
 from bpy_extras.io_utils import ImportHelper, ExportHelper 
 from bpy.types import Operator 
+
+
 
 class ShapekeyCounter(Operator):
     bl_idname = "ffxiv_tools.shape_count"
@@ -421,6 +424,7 @@ def shapekey_fixes(operator, context, dupes):
         
     return
     
+text_handle = None
 
 classes = (
     ImportFile,
@@ -439,15 +443,23 @@ def menu_func_export(self, context):
 
 def register(): 
     
+    
+
+    global text_handle
     for cls in classes:
         bpy.utils.register_class(cls)
 
     bpy.types.TOPBAR_MT_file_import.append(menu_func_import)
     bpy.types.TOPBAR_MT_file_export.append(menu_func_export)
+    text_handle = bpy.types.SpaceView3D.draw_handler_add(draw_widget, (), 'WINDOW', 'POST_PIXEL')
+    subscribe()
 
 def unregister():
+    global text_handle
+    unsubscribe()
     bpy.types.TOPBAR_MT_file_import.remove(menu_func_import)
     bpy.types.TOPBAR_MT_file_export.remove(menu_func_export)
+    bpy.types.SpaceView3D.draw_handler_remove(text_handle, 'WINDOW')
     for cls in classes:
         bpy.utils.unregister_class(cls)
 
@@ -463,3 +475,4 @@ if __name__ == "__main__":
         #if o.data.shape_keys:
         #    print(o.data.shape_keys.key_blocks.values())
         #print(context.blend_data.shape_keys['Butt Shapekeys'].key_blocks.find('shpx_wa_tre'))
+        
