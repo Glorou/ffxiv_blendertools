@@ -281,6 +281,9 @@ def apply_modifiers_with_shape_keys(context, selected_modifiers):
     pin_setting = original_obj.show_only_shape_key
     saved_active_shape_key_index = original_obj.active_shape_key_index
 
+    if saved_active_shape_key_index == 0: # hack to prevent some modifiers from failing if 'Basis' is active
+        original_obj.active_shape_key_index = 1
+
     # Duplicate the object
     copy_obj = duplicate_object(context, original_obj)
 

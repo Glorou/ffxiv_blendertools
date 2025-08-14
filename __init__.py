@@ -2,8 +2,8 @@ bl_info = {
     "name": "Final Fantasy 14: A File Handler Reborn",
     "author" : "Karou",
     "description": "File exporter tailored for FFXIV",
-    "blender": (4, 4, 0),
-    "version" : (0, 0, 1),
+    "blender": (4, 2, 0),
+    "version" : (0, 3, 0),
     "category": "Import-Export"
 }
 
@@ -94,8 +94,8 @@ class ExportFile(Operator, ExportHelper):
     def file_callback(self, context):
         return (
             ('.fbx', '.fbx file', "fbx for exporting to Textools"),
-            #('.gltf', '.gltf file', "gltf for exporting to Penumbra"),
-            #('.glb', '.glb file', "glb for exporting to Penumbra"),
+            ('.gltf', '.gltf file', "gltf for exporting to Penumbra"),
+            ('.glb', '.glb file', "glb for exporting to Penumbra"),
         )
     
     filter_glob: StringProperty(
@@ -167,7 +167,6 @@ class ExportFile(Operator, ExportHelper):
         selected = bpy.context.selected_objects
 
         #print(self.apply_modifiers)     
-        #code.interact(local=locals())
         if self.use_visible:
             objects = context.visible_objects
         elif self.use_selection:
@@ -175,11 +174,14 @@ class ExportFile(Operator, ExportHelper):
         else:
             objects = context.scene.objects
 
-        
+        currentview = context.object.mode
         dupes = []
+        
         tempcontext = bpy.context.copy()
+        bpy.ops.object.mode_set(mode='OBJECT')
         for o in(o for o in objects if o.type == 'MESH'):
             with context.temp_override(context=tempcontext):
+                
                 if context.selected_objects != []:
                     bpy.ops.object.select_all(action="DESELECT")
                 context.view_layer.objects.active = o
@@ -195,31 +197,41 @@ class ExportFile(Operator, ExportHelper):
             for mod in (mod for mod in o.modifiers if mod.type == 'ARMATURE'):
                 if mod.show_viewport and not any(x == mod.object for x in armatures):
                     armatures.append(mod.object)
+        #halts if a mesh doesnt have an armature modifier
+        if None in armatures:
+            self.report({'ERROR'}, "One or more meshes with an amature modifier doesn't have an associated armature, please add the armature or remove the modifier.")
+            for o in dupes:
+                bpy.data.objects.remove(o)
+            return {'CANCELLED'}
 
         armatures_export = []
         changed = None
-        for arm in armatures:
-            with context.temp_override(context=tempcontext):
 
-                arm_hidden = arm.hide_get()
-                if arm_hidden:
-                    arm.hide_set(False)
 
-                
-                #if this is true then the collection should not be in the view layer
-                if arm.hide_get() == arm.visible_get():
-                    coll = arm.users_collection[0]
-                    for lay in (lay for lay in context.scene.view_layers[0].layer_collection.children if lay.collection.user_of_id(arm.users_collection[0]) > 0):
-                        index = lay.children.find(arm.users_collection[0].name)
-                        if index != -1:
-                            changed = lay.children[index]
-                            lay.children[index].exclude = False
-                        else:
-                            for layer in (layer for layer in lay.children if layer.collection.user_of_id(arm.users_collection[0]) > 0):
-                                index = lay.children.find(arm.users_collection[0].name)
-                                if index != -1:
-                                    changed = lay.children[index]
-                                    lay.children[index].exclude = False
+        if(len(armatures) > 0):
+            for arm in armatures:
+                with context.temp_override(context=tempcontext):
+                    
+                    
+                    arm_hidden = arm.hide_get()
+                    if arm_hidden:
+                        arm.hide_set(False)
+
+                    
+                    #if this is true then the collection should not be in the view layer
+                    if arm.hide_get() == arm.visible_get():
+                        coll = arm.users_collection[0]
+                        for lay in (lay for lay in context.scene.view_layers[0].layer_collection.children if lay.collection.user_of_id(arm.users_collection[0]) > 0):
+                            index = lay.children.find(arm.users_collection[0].name)
+                            if index != -1:
+                                changed = lay.children[index]
+                                lay.children[index].exclude = False
+                            else:
+                                for layer in (layer for layer in lay.children if layer.collection.user_of_id(arm.users_collection[0]) > 0):
+                                    index = lay.children.find(arm.users_collection[0].name)
+                                    if index != -1:
+                                        changed = lay.children[index]
+                                        lay.children[index].exclude = False
 
 
 
@@ -266,7 +278,8 @@ class ExportFile(Operator, ExportHelper):
 
 
 
-
+            for ob in context.selected_objects:
+                ob.select_set(True)
                 
             
         
@@ -287,24 +300,23 @@ class ExportFile(Operator, ExportHelper):
                                             )
                 case ".glb" | ".gltf": 
                     #experemental gltf fix
-                    parent_meshes(self, context, dupes)
+                    #parent_meshes(self, context, dupes)
                     bpy.ops.export_scene.gltf(filepath = self.filepath,
                                             export_format= 'GLB' if self.filename_ext == '.glb' else 'GLTF_SEPARATE',
                                             export_tangents=True,
-                                            #use_active_collection = self.use_active_collection,
-                                            #use_visible = self.use_visible,
                                             use_selection = True,
                                             export_try_sparse_sk = False,
                                             export_apply = False if self.apply_modifiers == 'NO' else True,
                                             export_animations = False,
                                             )
             #code.interact(local=locals())
+        
         for o in dupes:
             bpy.data.objects.remove(o)
         bpy.context.view_layer.objects.active = active
+        bpy.ops.object.mode_set(mode=currentview)
         if changed != None:
             changed.exclude = True
-        #bpy.context.view_layer.objects.selected = selected
         return {'FINISHED'} 
 
 def export_main(layout, operator, is_file_browser):
