@@ -174,11 +174,17 @@ class ExportFile(Operator, ExportHelper):
         else:
             objects = context.scene.objects
 
-        currentview = context.object.mode
+
+        currentview = context.mode
+        if(currentview == "PAINT_WEIGHT"):
+            currentview = 'WEIGHT_PAINT'
         dupes = []
         
+
         tempcontext = bpy.context.copy()
-        bpy.ops.object.mode_set(mode='OBJECT')
+        if(currentview != 'OBJECT'):
+            bpy.ops.object.mode_set(mode='OBJECT')
+
         for o in(o for o in objects if o.type == 'MESH'):
             with context.temp_override(context=tempcontext):
                 
@@ -313,8 +319,13 @@ class ExportFile(Operator, ExportHelper):
         
         for o in dupes:
             bpy.data.objects.remove(o)
-        bpy.context.view_layer.objects.active = active
+        if(active != None):
+            bpy.context.view_layer.objects.active = active
+        else:
+            bpy.context.view_layer.objects.active = objects[0]
         bpy.ops.object.mode_set(mode=currentview)
+        if(active == None):
+            bpy.context.view_layer.objects.active = None
         if changed != None:
             changed.exclude = True
         return {'FINISHED'} 
@@ -414,7 +425,8 @@ def shapekey_fixes(operator, context, dupes):
             o.active_shape_key_index = o.data.shape_keys.key_blocks.find(shape.name)
             
             
-            selected_modifiers = [o.name for o in o.modifiers if o.type != 'ARMATURE']
+            selected_modifiers = [o.name for o in o.modifiers if o.type != 'ARMATURE' and o.show_viewport]
+            #code.interact(local=locals())
             #print(dir(selected_modifiers))
             #print("%d" % o.data.shape_keys.key_blocks.find(shape.name))
             apply_modifiers_with_shape_keys(context, selected_modifiers)
